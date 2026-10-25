@@ -2,167 +2,128 @@ package io.github.cleveroze.weatheryou.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import io.github.cleveroze.weatheryou.data.City
-import io.github.cleveroze.weatheryou.data.Weather
-import io.github.cleveroze.weatheryou.data.WeatherRepository
+import io.github.cleveroze.weatheryou.data.Forecast
+import io.github.cleveroze.weatheryou.data.LocationRepo
+import io.github.cleveroze.weatheryou.data.Place
+import io.github.cleveroze.weatheryou.data.Prefs
+import io.github.cleveroze.weatheryou.data.Settings
+import io.github.cleveroze.weatheryou.data.WeatherApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class UiState(
-    val city: City,
-    val weather: Weather? = null,
-    val loading: Boolean = true,
-    val refreshing: Boolean = false,
-    val error: String? = null,
-    val offline: Boolean = false,
-    val updatedAt: Long? = null,
-    val searchOpen: Boolean = false,
-    val searchQuery: String = "",
-    val searchResults: List<City> = emptyList(),
-    val searching: Boolean = false
-)
+sealed interface UiState {
+    data class Loading(val stage: String) : UiState
+    data class Ready(
+        val forecast: Forecast,
+        val refreshing: Boolean = false,
+        /** shown from cache because the network failed */
+        val offline: Boolean = false,
+    ) : UiState
+    data class Error(val message: String) : UiState
+}
 
-class WeatherViewModel(application: Application) : AndroidViewModel(application) {
+class WeatherViewModel(app: Application) : AndroidViewModel(app) {
+    val prefs = Prefs(app)
+    private val location = LocationRepo(app)
 
-    private val repository = WeatherRepository(application)
-    private val _state = MutableStateFlow(UiState(city = repository.savedCity()))
-    val state: StateFlow<UiState> = _state.asStateFlow()
+    val settings: StateFlow<Settings> = prefs.settings
+
+    private val _state = MutableStateFlow<UiState>(UiState.Loading("Запускаемся…"))
+    val state: StateFlow<UiState> = _state
+
+    private val _saved = MutableStateFlow(prefs.savedPlaces)
+    val savedPlaces: StateFlow<List<Place>> = _saved
+
+    private val _search = MutableStateFlow<List<Place>>(emptyList())
+    val searchResults: StateFlow<List<Place>> = _search
+    private val _searching = MutableStateFlow(false)
+    val searching: StateFlow<Boolean> = _searching
+
+    /** null = follow device location */
+    private val _selected = MutableStateFlow(prefs.selectedPlace)
+    val selected: StateFlow<Place?> = _selected
 
     private var loadJob: Job? = null
     private var searchJob: Job? = null
+    private var started = false
 
-    init {
-        val city = _state.value.city
-        val cached = repository.cached(city)
-        if (cached != null) {
-            _state.update {
-                it.copy(
-                    weather = cached,
-                    loading = false,
-                    updatedAt = repository.cachedAt(city).takeIf { time -> time > 0 }
+    fun hasLocationPermission() = location.hasPermission()
+
+    fun start() {
+        if (started) return
+        started = true
+        prefs.loadCache()?.let { cached ->
+            if (_selected.value == null || cached.place.lat == _selected.value?.lat) {
+                _state.value = UiState.Ready(cached, refreshing = true)
+            }
+        }
+        load()
+    }
+
+    fun refresh() = load()
+
+    private fun load() {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            val current = _state.value
+            if (current is UiState.Ready) _state.value = current.copy(refreshing = true)
+            try {
+                val place = _selected.value ?: run {
+                    if (current !is UiState.Ready) _state.value = UiState.Loading("Определяем, где вы…")
+                    location.currentPlace()
+                }
+                if (_state.value is UiState.Loading) _state.value = UiState.Loading("Загружаем прогноз для ${place.name}…")
+                val t0 = System.currentTimeMillis()
+                val r = WeatherApi.forecast(place)
+                // let the expressive loading indicator finish at least one morph cycle
+                val elapsed = System.currentTimeMillis() - t0
+                if (current !is UiState.Ready && elapsed < 700) delay(700 - elapsed)
+                prefs.saveCache(place, r.forecastJson, r.airJson)
+                _state.value = UiState.Ready(r.forecast)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val cached = (current as? UiState.Ready)?.forecast ?: prefs.loadCache()
+                _state.value = if (cached != null) UiState.Ready(cached, offline = true)
+                else UiState.Error(
+                    if (e is java.io.IOException) "Нет связи с сервером погоды. Проверьте интернет."
+                    else "Не удалось загрузить погоду: ${e.message ?: e.javaClass.simpleName}"
                 )
             }
         }
-        refresh()
     }
 
-    fun refresh() {
-        val city = _state.value.city
-        val hasWeather = _state.value.weather != null
-
-        loadJob?.cancel()
-        _state.update {
-            it.copy(
-                loading = !hasWeather,
-                refreshing = hasWeather,
-                error = null
-            )
+    fun selectPlace(place: Place?) {
+        _selected.value = place
+        prefs.selectedPlace = place
+        if (place != null && _saved.value.none { it.lat == place.lat && it.lon == place.lon }) {
+            _saved.value = listOf(place) + _saved.value
+            prefs.savedPlaces = _saved.value
         }
-
-        loadJob = viewModelScope.launch {
-            runCatching { repository.fetch(city) }
-                .onSuccess { weather ->
-                    _state.update {
-                        it.copy(
-                            weather = weather,
-                            loading = false,
-                            refreshing = false,
-                            error = null,
-                            offline = false,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                    }
-                }
-                .onFailure {
-                    _state.update { current ->
-                        current.copy(
-                            loading = false,
-                            refreshing = false,
-                            offline = current.weather != null,
-                            error = if (current.weather == null) {
-                                "Не удалось загрузить погоду. Проверь подключение."
-                            } else {
-                                null
-                            }
-                        )
-                    }
-                }
-        }
+        _state.value = (_state.value as? UiState.Ready)?.copy(refreshing = true) ?: UiState.Loading("Загружаем…")
+        load()
     }
 
-    fun openSearch() {
-        _state.update {
-            it.copy(
-                searchOpen = true,
-                searchQuery = "",
-                searchResults = emptyList(),
-                searching = false
-            )
-        }
+    fun removePlace(place: Place) {
+        _saved.value = _saved.value.filterNot { it.lat == place.lat && it.lon == place.lon }
+        prefs.savedPlaces = _saved.value
+        if (_selected.value?.lat == place.lat && _selected.value?.lon == place.lon) selectPlace(null)
     }
 
-    fun closeSearch() {
+    fun search(query: String) {
         searchJob?.cancel()
-        _state.update {
-            it.copy(
-                searchOpen = false,
-                searchQuery = "",
-                searchResults = emptyList(),
-                searching = false
-            )
-        }
-    }
-
-    fun onQueryChange(query: String) {
-        searchJob?.cancel()
-
-        if (query.trim().length < 2) {
-            _state.update { it.copy(searchQuery = query, searchResults = emptyList(), searching = false) }
-            return
-        }
-
-        _state.update { it.copy(searchQuery = query, searching = true) }
-
+        if (query.isBlank()) { _search.value = emptyList(); _searching.value = false; return }
         searchJob = viewModelScope.launch {
-            delay(320)
-            val results = runCatching { repository.search(query) }.getOrDefault(emptyList())
-            if (_state.value.searchQuery == query) {
-                _state.update { it.copy(searchResults = results, searching = false) }
-            }
+            _searching.value = true
+            delay(300) // debounce
+            _search.value = runCatching { WeatherApi.searchCities(query) }.getOrDefault(emptyList())
+            _searching.value = false
         }
     }
 
-    fun selectCity(city: City) {
-        if (city.latitude == _state.value.city.latitude &&
-            city.longitude == _state.value.city.longitude
-        ) {
-            closeSearch()
-            return
-        }
-
-        repository.saveCity(city)
-        val cached = repository.cached(city)
-        _state.value = UiState(
-            city = city,
-            weather = cached,
-            loading = cached == null,
-            updatedAt = repository.cachedAt(city).takeIf { it > 0 }
-        )
-        refresh()
-    }
-
-    class Factory(private val application: Application) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return WeatherViewModel(application) as T
-        }
-    }
+    fun updateSettings(block: (Settings) -> Settings) = prefs.update(block)
 }

@@ -1,2 +1,2 @@
-# Keep Open-Meteo model classes if minification is ever enabled.
--keep class org.json.** { *; }
+# Keep line numbers for readable crash reports
+-keepattributes SourceFile,LineNumberTable

@@ -1,16 +1,27 @@
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+
 package io.github.cleveroze.weatheryou.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,34 +33,40 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Place
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,222 +76,177 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.cleveroze.weatheryou.data.City
-import io.github.cleveroze.weatheryou.data.DayForecast
-import io.github.cleveroze.weatheryou.data.HourForecast
-import io.github.cleveroze.weatheryou.data.Weather
-import io.github.cleveroze.weatheryou.data.WeatherKind
-import io.github.cleveroze.weatheryou.data.conditionText
-import io.github.cleveroze.weatheryou.data.dayLabel
-import io.github.cleveroze.weatheryou.data.formatHour
-import io.github.cleveroze.weatheryou.data.formatTemp
-import io.github.cleveroze.weatheryou.data.formatTempShort
-import io.github.cleveroze.weatheryou.data.formatUpdateTime
-import io.github.cleveroze.weatheryou.data.weatherKind
-import io.github.cleveroze.weatheryou.data.windDirection
-import io.github.cleveroze.weatheryou.ui.theme.WeatherSystemBars
+import io.github.cleveroze.weatheryou.data.DayWeather
+import io.github.cleveroze.weatheryou.data.Forecast
+import io.github.cleveroze.weatheryou.data.HourWeather
+import io.github.cleveroze.weatheryou.data.Settings
+import io.github.cleveroze.weatheryou.data.Wmo
+import io.github.cleveroze.weatheryou.ui.components.MorphingShapeBox
+import io.github.cleveroze.weatheryou.ui.components.PolygonShape
+import io.github.cleveroze.weatheryou.ui.components.SkyBackground
+import io.github.cleveroze.weatheryou.ui.components.SkyShapes
+import io.github.cleveroze.weatheryou.ui.components.WeatherGlyph
+import io.github.cleveroze.weatheryou.ui.theme.HugeTemp
 import kotlinx.coroutines.delay
-import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
-fun WeatherRoute(viewModel: WeatherViewModel) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    val dark = isSystemInDarkTheme()
+fun WeatherApp(vm: WeatherViewModel) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    var showPlaces by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
 
-    WeatherSystemBars(darkTheme = dark)
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        WeatherBackdrop(weather = state.weather, dark = dark)
-
-        val weather = state.weather
-        when {
-            weather != null -> WeatherContent(
-                state = state,
-                onRefresh = viewModel::refresh,
-                onCityClick = viewModel::openSearch
-            )
-
-            state.loading -> LoadingScreen(city = state.city)
-
-            else -> ErrorScreen(
-                message = state.error ?: "Не удалось загрузить погоду",
-                onRetry = viewModel::refresh,
-                onChangeCity = viewModel::openSearch
-            )
-        }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (vm.state.value is UiState.Ready) vm.refresh() else vm.start()
+    }
+    val askLocation = {
+        permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+    }
+    LaunchedEffect(Unit) {
+        if (!vm.hasLocationPermission() && !vm.prefs.askedLocation && vm.selected.value == null) {
+            vm.prefs.askedLocation = true
+            askLocation()
+        } else vm.start()
     }
 
-    if (state.searchOpen) {
-        CityPickerSheet(
-            state = state,
-            onDismiss = viewModel::closeSearch,
-            onQueryChange = viewModel::onQueryChange,
-            onPick = viewModel::selectCity
+    val forecast = (state as? UiState.Ready)?.forecast
+    val motion = MaterialTheme.motionScheme
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        SkyBackground(
+            sky = forecast?.let { Wmo.sky(it.current.code) },
+            isDay = forecast?.current?.isDay ?: true,
+            tint = settings.weatherTint,
+            animate = settings.animations,
         )
-    }
-}
-
-@Composable
-private fun WeatherBackdrop(weather: Weather?, dark: Boolean) {
-    val scheme = MaterialTheme.colorScheme
-    val accent = weather?.let { moodAccent(weatherKind(it.current.code), it.current.isDay) }
-        ?: scheme.primary
-
-    val top = lerp(scheme.surface, accent, if (dark) 0.20f else 0.28f)
-    val middle = lerp(scheme.surface, accent, if (dark) 0.07f else 0.11f)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    0f to top,
-                    0.52f to middle,
-                    1f to scheme.surface
+        AnimatedContent(
+            targetState = state,
+            contentKey = { it::class },
+            transitionSpec = {
+                (fadeIn(motion.slowEffectsSpec()) + scaleIn(motion.slowSpatialSpec(), initialScale = 0.92f))
+                    .togetherWith(fadeOut(motion.fastEffectsSpec()) + scaleOut(targetScale = 1.04f))
+            },
+            label = "state",
+        ) { s ->
+            when (s) {
+                is UiState.Loading -> LoadingScreen(s.stage)
+                is UiState.Error -> ErrorScreen(s.message, onRetry = vm::refresh, onPickCity = { showPlaces = true })
+                is UiState.Ready -> ReadyScreen(
+                    s, settings,
+                    onRefresh = vm::refresh,
+                    onPlaces = { showPlaces = true },
+                    onSettings = { showSettings = true },
+                    onAskLocation = askLocation,
                 )
-            )
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val center = Offset(size.width * 0.78f, size.height * 0.06f)
-            val radius = size.width * 1.05f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        accent.copy(alpha = if (dark) 0.16f else 0.20f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = radius
-                ),
-                radius = radius,
-                center = center
-            )
+            }
         }
     }
+
+    if (showPlaces) PlacesSheet(vm, onDismiss = { showPlaces = false }, onUseLocation = {
+        if (!vm.hasLocationPermission()) askLocation()
+        vm.selectPlace(null)
+    })
+    if (showSettings) SettingsSheet(settings, vm::updateSettings, onDismiss = { showSettings = false })
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Staggered spring entrance for list sections. */
 @Composable
-private fun WeatherContent(
-    state: UiState,
-    onRefresh: () -> Unit,
-    onCityClick: () -> Unit
-) {
-    val weather = state.weather ?: return
-    val insets = WindowInsets.safeDrawing.asPaddingValues()
+fun Enter(index: Int, animate: Boolean, content: @Composable () -> Unit) {
+    val a = remember { Animatable(if (animate) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        if (a.value < 1f) {
+            delay(60L * index)
+            a.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessLow))
+        }
+    }
+    Box(
+        Modifier.graphicsLayer {
+            alpha = a.value.coerceIn(0f, 1f)
+            translationY = (1f - a.value) * 80.dp.toPx()
+            val s = 0.92f + 0.08f * a.value
+            scaleX = s; scaleY = s
+        }
+    ) { content() }
+}
 
+@Composable
+private fun ReadyScreen(
+    s: UiState.Ready,
+    settings: Settings,
+    onRefresh: () -> Unit,
+    onPlaces: () -> Unit,
+    onSettings: () -> Unit,
+    onAskLocation: () -> Unit,
+) {
+    val f = s.forecast
+    val pull = rememberPullToRefreshState()
+    val insets = WindowInsets.safeDrawing.asPaddingValues()
     PullToRefreshBox(
-        isRefreshing = state.refreshing,
+        isRefreshing = s.refreshing,
         onRefresh = onRefresh,
-        modifier = Modifier.fillMaxSize()
+        state = pull,
+        modifier = Modifier.fillMaxSize(),
+        indicator = {
+            val frac = if (s.refreshing) 1f else pull.distanceFraction.coerceIn(0f, 1.2f)
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = insets.calculateTopPadding())
+                    .graphicsLayer {
+                        alpha = frac.coerceAtMost(1f)
+                        scaleX = 0.4f + 0.6f * frac.coerceAtMost(1f)
+                        scaleY = scaleX
+                        translationY = frac * 56.dp.toPx() - 24.dp.toPx()
+                        rotationZ = frac * 180f
+                    }
+            ) {
+                if (frac > 0.01f) ContainedLoadingIndicator(Modifier.size(56.dp))
+            }
+        },
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = insets.calculateTopPadding() + 6.dp,
-                bottom = insets.calculateBottomPadding() + 30.dp
+                top = insets.calculateTopPadding() + 4.dp,
+                bottom = insets.calculateBottomPadding() + 24.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item {
-                Reveal(0) {
-                    TopBar(state = state, onCityClick = onCityClick, onRefresh = onRefresh)
+            item(key = "header") { Header(f, onPlaces, onSettings) }
+            item(key = "hero") { Enter(0, settings.animations) { Hero(f, settings) } }
+            if (s.offline || f.place.approximate) item(key = "banner") {
+                Enter(1, settings.animations) { Banner(s.offline, f.place.approximate, onAskLocation) }
+            }
+            item(key = "hourly") {
+                Enter(2, settings.animations) {
+                    SectionCard("По часам", trailing = "${f.hours.size - 1} ч") { HourlyStrip(f.hours, settings) }
                 }
             }
-            item {
-                Reveal(1) {
-                    Hero(weather = weather)
+            item(key = "daily") {
+                Enter(3, settings.animations) {
+                    SectionCard("На ${f.days.size} дней") { DailyList(f, settings) }
                 }
             }
-            item {
-                Reveal(2) {
-                    HourlySection(weather = weather)
-                }
-            }
-            item {
-                Reveal(3) {
-                    DetailsSection(weather = weather)
-                }
-            }
-            item {
-                Reveal(4) {
-                    DailySection(weather = weather)
-                }
-            }
-            item {
-                Reveal(5) {
-                    Footer()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TopBar(state: UiState, onCityClick: () -> Unit, onRefresh: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(16.dp))
-                .clickable(onClick = onCityClick)
-                .padding(horizontal = 2.dp, vertical = 4.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            item(key = "details") { Enter(4, settings.animations) { Details(f, settings) } }
+            item(key = "footer") {
                 Text(
-                    text = state.city.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Выбрать город",
-                    modifier = Modifier.size(22.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                text = when {
-                    state.offline -> "нет сети · данные в кэше"
-                    state.refreshing -> "обновляем…"
-                    state.updatedAt != null -> "обновлено ${formatUpdateTime(state.updatedAt!!)}"
-                    else -> "сегодня"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = if (state.offline) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        if (state.refreshing && !state.loading) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(horizontal = 14.dp)
-                    .size(22.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary
-            )
-        } else {
-            IconButton(onClick = onRefresh) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Обновить погоду",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Данные: Open-Meteo · обновлено ${relativeUpdated(f.fetchedAt)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )
             }
         }
@@ -282,249 +254,305 @@ private fun TopBar(state: UiState, onCityClick: () -> Unit, onRefresh: () -> Uni
 }
 
 @Composable
-private fun Hero(weather: Weather) {
-    val current = weather.current
-    val kind = weatherKind(current.code)
-    val target = current.temperature.roundToInt()
-    val animated by animateIntAsState(
-        targetValue = target,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = 160f),
-        label = "temperature"
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(382.dp)
-    ) {
-        WeatherArt(
-            kind = kind,
-            isDay = current.isDay,
-            modifier = Modifier
-                .size(222.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = 4.dp)
-        )
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = formatTemp(animated.toDouble()),
-                style = MaterialTheme.typography.displayLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
-            )
-            Text(
-                text = conditionText(current.code),
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Ощущается как ${formatTemp(current.feelsLike)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun HourlySection(weather: Weather) {
-    Column {
-        SectionHeader("По часам", "24 часа")
-        Spacer(Modifier.height(10.dp))
+private fun Header(f: Forecast, onPlaces: () -> Unit, onSettings: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Surface(
+            onClick = onPlaces,
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.78f),
+            modifier = Modifier.weight(1f, fill = false),
         ) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            Row(Modifier.padding(start = 12.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(36.dp).clip(PolygonShape(MaterialShapes.Cookie6Sided)).background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (f.place.isCurrent) Icons.Rounded.LocationOn else Icons.Rounded.Place, null,
+                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp),
+                    )
+                }
+                Column(Modifier.padding(start = 10.dp).weight(1f, fill = false)) {
+                    Text(f.place.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (f.place.isCurrent) "Вы здесь · ${hhmm(f.nowLocal)}" else f.place.region.ifBlank { hhmm(f.nowLocal) },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(Icons.Rounded.KeyboardArrowDown, null, modifier = Modifier.padding(start = 4.dp))
+            }
+        }
+        Spacer(Modifier.weight(0.01f))
+        FilledTonalIconButton(onClick = onSettings, modifier = Modifier.padding(start = 8.dp).size(48.dp)) {
+            Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+        }
+    }
+}
+
+@Composable
+private fun Hero(f: Forecast, settings: Settings) {
+    val c = f.current
+    val sky = Wmo.sky(c.code)
+    val cs = MaterialTheme.colorScheme
+    val today = f.days.firstOrNull()
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(310.dp)) {
+            MorphingShapeBox(
+                target = SkyShapes.hero(sky, c.isDay),
+                modifier = Modifier.fillMaxSize().padding(14.dp),
+                brush = Brush.linearGradient(listOf(cs.primaryContainer, lerp(cs.primaryContainer, cs.tertiaryContainer, 0.85f))),
+                spin = settings.animations,
+                spinMillis = 40_000,
             ) {
-                itemsIndexed(weather.hourly) { index, hour ->
-                    HourlyCell(hour = hour, isNow = index == 0)
-                }
+                val target = settings.tempValue(c.temp).toFloat()
+                val shown by animateFloatAsState(target, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessVeryLow), label = "temp")
+                val v = shown.roundToInt()
+                Text(
+                    (if (v < 0) "−${-v}" else "$v") + "°",
+                    style = HugeTemp,
+                    color = cs.onPrimaryContainer,
+                    modifier = Modifier.offset(x = 10.dp),
+                )
+            }
+            WeatherGlyph(
+                c.code, c.isDay,
+                Modifier.size(118.dp).align(Alignment.TopEnd).offset(x = 6.dp, y = (-6).dp),
+                animated = settings.animations,
+            )
+        }
+        Text(Wmo.describe(c.code, c.isDay), style = MaterialTheme.typography.headlineMedium, color = cs.onSurface, textAlign = TextAlign.Center)
+        Text(
+            "Ощущается как ${settings.temp(c.feelsLike)}",
+            style = MaterialTheme.typography.titleMedium, color = cs.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        if (today != null) {
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("↑ ${settings.temp(today.max)}", cs.tertiaryContainer, cs.onTertiaryContainer)
+                Pill("↓ ${settings.temp(today.min)}", cs.secondaryContainer, cs.onSecondaryContainer)
+                if (today.precipProb > 0) Pill("☂ ${today.precipProb}%", cs.primaryContainer, cs.onPrimaryContainer)
             }
         }
     }
 }
 
 @Composable
-private fun HourlyCell(hour: HourForecast, isNow: Boolean) {
-    val scheme = MaterialTheme.colorScheme
-    val container = if (isNow) scheme.primaryContainer else Color.Transparent
-    val content = if (isNow) scheme.onPrimaryContainer else scheme.onSurface
-    val kind = weatherKind(hour.code)
-    val isDay = hour.time.hour in 7..20
-
-    Column(
-        modifier = Modifier
-            .width(58.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(container)
-            .padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = if (isNow) "Сейчас" else formatHour(hour.time),
-            style = MaterialTheme.typography.labelSmall,
-            color = content.copy(alpha = 0.75f),
-            maxLines = 1
-        )
-        Spacer(Modifier.height(7.dp))
-        WeatherGlyph(kind = kind, isDay = isDay, modifier = Modifier.size(26.dp))
-        Spacer(Modifier.height(7.dp))
-        Text(
-            text = formatTempShort(hour.temperature),
-            style = MaterialTheme.typography.titleMedium,
-            color = content
-        )
-        Text(
-            text = if (hour.precipitationProbability > 0) "${hour.precipitationProbability}%" else " ",
-            style = MaterialTheme.typography.labelSmall,
-            color = content.copy(alpha = 0.5f),
-            maxLines = 1
-        )
+fun Pill(text: String, bg: Color, fg: Color) {
+    Surface(shape = CircleShape, color = bg, contentColor = fg) {
+        Text(text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
     }
 }
 
 @Composable
-private fun DetailsSection(weather: Weather) {
-    val current = weather.current
-    Column {
-        SectionHeader("Детали")
-        Spacer(Modifier.height(10.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            DetailTile(
-                label = "Ветер",
-                value = "${current.windSpeed.roundToInt()} м/с",
-                sub = windDirection(current.windDirection),
-                modifier = Modifier.weight(1f)
-            )
-            DetailTile(
-                label = "Влажность",
-                value = "${current.humidity}%",
-                sub = "относительная",
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            DetailTile(
-                label = "Осадки",
-                value = String.format(Locale.US, "%.1f", current.precipitation),
-                sub = "мм за час",
-                modifier = Modifier.weight(1f)
-            )
-            DetailTile(
-                label = "Давление",
-                value = "${current.pressure.roundToInt()}",
-                sub = "гПа",
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        val day = weather.daily.firstOrNull()
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
-        ) {
-            Row(Modifier.padding(18.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Рассвет",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        day?.sunrise ?: "—",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Закат",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        day?.sunset ?: "—",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DetailTile(
-    label: String,
-    value: String,
-    sub: String,
-    modifier: Modifier = Modifier
-) {
+private fun Banner(offline: Boolean, approximate: Boolean, onAskLocation: () -> Unit) {
     Surface(
-        modifier = modifier,
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
     ) {
-        Column(Modifier.padding(18.dp)) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (offline) Icons.Rounded.Warning else Icons.Rounded.LocationOn, null)
             Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                if (offline) "Нет сети — показан сохранённый прогноз"
+                else "Место определено примерно, по IP. Разрешите геолокацию для точного прогноза",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
             )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontSize = 23.sp,
-                    fontWeight = FontWeight.Normal
-                ),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
-            )
-            Text(
-                text = sub,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            if (!offline && approximate) TextButton(onClick = onAskLocation) { Text("Разрешить") }
+        }
+    }
+}
+
+@Composable
+fun SectionCard(title: String, trailing: String? = null, content: @Composable () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(32.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.86f),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Column(Modifier.padding(vertical = 16.dp)) {
+            Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                if (trailing != null) Text(trailing, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(10.dp))
+            content()
+        }
+    }
+}
+
+// --------------------------------------------------------------------------------------
+// Hourly
+// --------------------------------------------------------------------------------------
+
+@Composable
+private fun HourlyStrip(hours: List<HourWeather>, settings: Settings) {
+    if (hours.isEmpty()) return
+    var selected by remember { mutableIntStateOf(0) }
+    val temps = hours.map { settings.tempValue(it.temp) }
+    val tMin = temps.min()
+    val tMax = temps.max()
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp)) {
+        hours.forEachIndexed { i, h ->
+            HourItem(
+                h, i, temps, tMin, tMax, settings,
+                selected = i == selected,
+                onClick = { selected = i },
             )
         }
     }
 }
 
 @Composable
-private fun DailySection(weather: Weather) {
-    if (weather.daily.isEmpty()) return
+private fun HourItem(
+    h: HourWeather, i: Int, temps: List<Double>, tMin: Double, tMax: Double, settings: Settings,
+    selected: Boolean, onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val sel by animateFloatAsState(if (selected) 1f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "sel")
+    val measurer = rememberTextMeasurer()
+    val labelStyle = MaterialTheme.typography.labelLarge.copy(color = cs.onSurface, fontWeight = FontWeight.SemiBold)
+    Column(
+        Modifier
+            .width(62.dp)
+            .clip(RoundedCornerShape(31.dp))
+            .background(cs.primaryContainer.copy(alpha = 0.9f * sel))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            if (i == 0) "Сейчас" else hhmm(h.time),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) cs.onPrimaryContainer else cs.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Box(Modifier.padding(vertical = 6.dp).size(40.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(40.dp).graphicsLayer { scaleX = sel; scaleY = sel; rotationZ = 90f * sel }
+                    .clip(PolygonShape(MaterialShapes.Clover4Leaf)).background(cs.tertiaryContainer)
+            )
+            WeatherGlyph(h.code, h.isDay, Modifier.size(30.dp))
+        }
+        // temperature curve segment
+        Canvas(Modifier.fillMaxWidth().height(58.dp)) {
+            val range = (tMax - tMin).coerceAtLeast(1.0)
+            fun y(t: Double) = (size.height - 8.dp.toPx()) - ((t - tMin) / range).toFloat() * (size.height - 30.dp.toPx())
+            val cy = y(temps[i])
+            val ly = if (i > 0) (y(temps[i - 1]) + cy) / 2 else cy
+            val ry = if (i < temps.lastIndex) (y(temps[i + 1]) + cy) / 2 else cy
+            val path = Path().apply {
+                moveTo(0f, ly)
+                cubicTo(size.width * 0.25f, ly, size.width * 0.25f, cy, size.width / 2, cy)
+                cubicTo(size.width * 0.75f, cy, size.width * 0.75f, ry, size.width, ry)
+            }
+            drawPath(path, cs.primary.copy(alpha = 0.7f), style = Stroke(3.dp.toPx()))
+            drawCircle(cs.surface, radius = 6.dp.toPx(), center = Offset(size.width / 2, cy))
+            drawCircle(cs.primary, radius = 4.dp.toPx(), center = Offset(size.width / 2, cy))
+            val layout = measurer.measure(settings.temp(h.temp), labelStyle)
+            drawText(layout, topLeft = Offset(size.width / 2 - layout.size.width / 2, cy - layout.size.height - 6.dp.toPx()))
+        }
+        Text(
+            if (h.precipProb >= 10) "${h.precipProb}%" else " ",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.primary,
+        )
+    }
+}
 
-    val weekMin = weather.daily.minOf { it.min }
-    val weekMax = weather.daily.maxOf { it.max }
+// --------------------------------------------------------------------------------------
+// Daily
+// --------------------------------------------------------------------------------------
 
-    Column {
-        SectionHeader("На неделю")
-        Spacer(Modifier.height(10.dp))
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+private fun tempColor(t: Double): Color {
+    val stops = listOf(
+        -25.0 to Color(0xFF5B5BD6), -10.0 to Color(0xFF4F8FE8), 0.0 to Color(0xFF6CC4E8),
+        10.0 to Color(0xFF7FCB8E), 20.0 to Color(0xFFF2C94C), 30.0 to Color(0xFFF2994A), 40.0 to Color(0xFFE5484D),
+    )
+    if (t <= stops.first().first) return stops.first().second
+    for (k in 1 until stops.size) {
+        if (t <= stops[k].first) {
+            val (t0, c0) = stops[k - 1]
+            val (t1, c1) = stops[k]
+            return lerp(c0, c1, ((t - t0) / (t1 - t0)).toFloat())
+        }
+    }
+    return stops.last().second
+}
+
+@Composable
+private fun DailyList(f: Forecast, settings: Settings) {
+    var expanded by rememberSaveable { mutableIntStateOf(-1) }
+    val gMin = f.days.minOf { it.min }
+    val gMax = f.days.maxOf { it.max }
+    Column(Modifier.padding(horizontal = 8.dp)) {
+        f.days.forEachIndexed { i, d ->
+            DayRow(d, i, gMin, gMax, if (i == 0) f.current.temp else null, settings, expanded == i) {
+                expanded = if (expanded == i) -1 else i
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayRow(
+    d: DayWeather, i: Int, gMin: Double, gMax: Double, now: Double?, settings: Settings,
+    expanded: Boolean, onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val bg by animateFloatAsState(if (expanded) 1f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "bg")
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape((20 + 8 * bg).dp))
+            .background(cs.surfaceContainerHighest.copy(alpha = 0.7f * bg))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(dayLabel(d.date, i), style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(92.dp), maxLines = 1)
+            WeatherGlyph(d.code, true, Modifier.size(30.dp))
+            Text(
+                if (d.precipProb >= 10) "${d.precipProb}%" else "",
+                style = MaterialTheme.typography.labelMedium, color = cs.primary,
+                modifier = Modifier.width(40.dp).padding(start = 4.dp),
+            )
+            Text(settings.temp(d.min), color = cs.onSurfaceVariant, textAlign = TextAlign.End, modifier = Modifier.width(40.dp))
+            Canvas(Modifier.weight(1f).height(10.dp).padding(horizontal = 10.dp)) {
+                val range = (gMax - gMin).coerceAtLeast(1.0)
+                val r = CornerRadius(size.height / 2)
+                drawRoundRect(cs.surfaceVariant, cornerRadius = r)
+                val x0 = ((d.min - gMin) / range).toFloat() * size.width
+                val x1 = ((d.max - gMin) / range).toFloat() * size.width
+                drawRoundRect(
+                    Brush.horizontalGradient(listOf(tempColor(d.min), tempColor(d.max)), startX = x0, endX = x1),
+                    topLeft = Offset(x0, 0f), size = Size((x1 - x0).coerceAtLeast(size.height), size.height), cornerRadius = r,
+                )
+                if (now != null) {
+                    val xn = ((now - gMin) / range).toFloat().coerceIn(0f, 1f) * size.width
+                    drawCircle(cs.surface, radius = size.height * 0.75f, center = Offset(xn, size.height / 2))
+                    drawCircle(cs.onSurface, radius = size.height * 0.45f, center = Offset(xn, size.height / 2))
+                }
+            }
+            Text(settings.temp(d.max), fontWeight = FontWeight.SemiBold, modifier = Modifier.width(40.dp))
+        }
+        AnimatedVisibility(
+            expanded,
+            enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeIn(),
+            exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeOut(),
         ) {
-            Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                weather.daily.forEach { day ->
-                    DayRow(day = day, weekMin = weekMin, weekMax = weekMax)
+            Column(Modifier.padding(top = 10.dp)) {
+                Text(Wmo.describe(d.code), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val (w, wu) = settings.wind(d.windMaxMs)
+                    MiniStat("Восход", hhmm(d.sunrise), Modifier.weight(1f))
+                    MiniStat("Закат", hhmm(d.sunset), Modifier.weight(1f))
+                    MiniStat("Ветер", "$w $wu", Modifier.weight(1f))
+                }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MiniStat("УФ", "${d.uvMax.roundToInt()} · ${uvLevel(d.uvMax).lowercase()}", Modifier.weight(1f))
+                    MiniStat("Осадки", String.format(java.util.Locale("ru"), "%.1f мм", d.precipSum), Modifier.weight(1f))
                 }
             }
         }
@@ -532,209 +560,11 @@ private fun DailySection(weather: Weather) {
 }
 
 @Composable
-private fun DayRow(day: DayForecast, weekMin: Double, weekMax: Double) {
-    val scheme = MaterialTheme.colorScheme
-    val isToday = day.date == java.time.LocalDate.now()
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = dayLabel(day.date),
-            modifier = Modifier.width(68.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (isToday) scheme.primary else scheme.onSurface,
-            fontWeight = if (isToday) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1
-        )
-        WeatherGlyph(
-            kind = weatherKind(day.code),
-            isDay = true,
-            modifier = Modifier.size(22.dp)
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = formatTempShort(day.min),
-            modifier = Modifier.width(34.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurfaceVariant,
-            textAlign = TextAlign.End
-        )
-        Spacer(Modifier.width(8.dp))
-        TempRange(
-            day = day,
-            weekMin = weekMin,
-            weekMax = weekMax,
-            modifier = Modifier
-                .weight(1f)
-                .height(6.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = formatTempShort(day.max),
-            modifier = Modifier.width(34.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurface
-        )
-    }
-}
-
-@Composable
-private fun TempRange(
-    day: DayForecast,
-    weekMin: Double,
-    weekMax: Double,
-    modifier: Modifier = Modifier
-) {
-    val primary = MaterialTheme.colorScheme.primary
-    val track = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-
-    Canvas(modifier) {
-        val height = size.height
-        val corner = CornerRadius(height / 2f)
-        drawRoundRect(color = track, size = size, cornerRadius = corner)
-
-        val span = (weekMax - weekMin).coerceAtLeast(1.0)
-        val startFraction = ((day.min - weekMin) / span).toFloat().coerceIn(0f, 1f)
-        val endFraction = ((day.max - weekMin) / span).toFloat().coerceIn(0f, 1f)
-        val startX = size.width * startFraction
-        val width = (size.width * (endFraction - startFraction)).coerceAtLeast(height)
-        val clampedX = startX.coerceAtMost((size.width - width).coerceAtLeast(0f))
-
-        drawRoundRect(
-            brush = Brush.horizontalGradient(
-                listOf(primary.copy(alpha = 0.55f), primary)
-            ),
-            topLeft = Offset(clampedX, 0f),
-            size = Size(width, height),
-            cornerRadius = corner
-        )
-    }
-}
-
-@Composable
-private fun SectionHeader(title: String, trailing: String? = null) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        if (trailing != null) {
-            Text(
-                text = trailing,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+private fun MiniStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.titleSmall, fontSize = 14.sp, maxLines = 1)
         }
-    }
-}
-
-@Composable
-private fun Footer() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 2.dp),
-        horizontalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Open-Meteo · WeatherYou",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-        )
-    }
-}
-
-@Composable
-private fun LoadingScreen(city: City) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        WeatherArt(
-            kind = WeatherKind.PARTLY_CLOUDY,
-            isDay = true,
-            modifier = Modifier.size(198.dp)
-        )
-        Spacer(Modifier.height(18.dp))
-        Text(
-            text = "Загружаем погоду",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = city.name,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun ErrorScreen(message: String, onRetry: () -> Unit, onChangeCity: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp)
-            .navigationBarsPadding(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        WeatherArt(
-            kind = WeatherKind.CLOUDY,
-            isDay = true,
-            modifier = Modifier.size(172.dp)
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = "Не получилось",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(22.dp))
-        Button(
-            onClick = onRetry,
-            shape = RoundedCornerShape(999.dp)
-        ) {
-            Text("Повторить")
-        }
-        TextButton(onClick = onChangeCity) {
-            Text("Выбрать другой город")
-        }
-    }
-}
-
-@Composable
-private fun Reveal(index: Int, content: @Composable () -> Unit) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(index * 70L)
-        visible = true
-    }
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(460, easing = FastOutSlowInEasing)) +
-            slideInVertically(tween(460, easing = FastOutSlowInEasing)) { height -> height / 22 }
-    ) {
-        content()
     }
 }
