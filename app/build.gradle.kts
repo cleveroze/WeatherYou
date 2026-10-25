@@ -9,7 +9,7 @@ val releaseKeystore: String? = System.getenv("WEATHERYOU_KEYSTORE")
 
 android {
     namespace = "io.github.cleveroze.weatheryou"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.cleveroze.weatheryou"
